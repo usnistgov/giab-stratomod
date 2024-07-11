@@ -1225,7 +1225,7 @@ class FeatureDefs(_BaseModel):
 # mypy be stupid here, see https://github.com/pydantic/pydantic/issues/1684
 class Tools(_BaseModel):
     "Various tools that need to be downloaded for the pipeline to work"
-    repseq: HttpUrl = "https://github.com/ndwarshuis/repseq/archive/refs/tags/v1.1.0.tar.gz"  # type: ignore
+    repseq: HttpUrl = "https://github.com/usnistgov/giab-repseq/archive/refs/tags/v1.1.0.tar.gz"  # type: ignore
 
 
 LabeledQueries = dict[LabeledQueryKey, LabeledVCFQuery]

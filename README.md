@@ -23,11 +23,11 @@ of the model is important for allowing end users to understand the relationship
 each feature has to the prediction, which facilitates understanding (for
 example) at what lengths of homopolymers the likelihood of incorrectly calling a
 variant drastically increases. This precision is an improvement over [existing
-methods](https://github.com/ndwarshuis/giab-strats-smk) we have developed for
-stratifying the genome by difficulty into discrete bins. Furthermore, this
-modeling framework allows understanding of interactions between different
-genomic contexts, which is important as many repetitive characteristics do not
-exist in isolation.
+methods](https://github.com/usnistgov/giab-stratifications) we have
+developed for stratifying the genome by difficulty into discrete bins.
+Furthermore, this modeling framework allows understanding of interactions
+between different genomic contexts, which is important as many repetitive
+characteristics do not exist in isolation.
 
 We anticipate `StratoMod` would be useful for both method developers and
 clinicians who wish to better understand variant calling error modalities. In
