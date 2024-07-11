@@ -1,74 +1,148 @@
+import gzip
 from functools import reduce
-import pandas as pd
-from typing import Any, cast
-import numpy as np
-from common.tsv import write_tsv
-from pybedtools import BedTool as bt  # type: ignore
+from pathlib import Path
+from typing import Any, Generator, NamedTuple, IO
 from common.io import setup_logging
+from common.functional import maybe
 import common.config as cfg
 
 logger = setup_logging(snakemake.log[0])  # type: ignore
 
 
-def left_outer_intersect(left: pd.DataFrame, path: str) -> pd.DataFrame:
-    logger.info("Adding annotations from %s", path)
-
-    # Use bedtools to perform left-outer join of two bed/tsv files. Since
-    # bedtools will join all columns from the two input files, keep track of the
-    # width of the left input file so that the first three columns of the right
-    # input (chr, chrStart, chrEnd, which are redundant) can be dropped.
-    left_cols = left.columns.tolist()
-    left_width = len(left_cols)
-    right = pd.read_table(path)
-    # ASSUME the first three columns are the bed index columns
-    right_cols = ["_" + c if i < 3 else c for i, c in enumerate(right.columns.tolist())]
-    right_bed = bt.from_dataframe(right)
-    # prevent weird type errors when converted back to dataframe from bed
-    dtypes = {right_cols[0]: str}
-    # convert "." to NaN since "." is a string/object which will make pandas run
-    # slower than an actual panda
-    na_vals = {c: "." for c in left_cols + right_cols[3:]}
-    new_df = cast(
-        pd.DataFrame,
-        bt.from_dataframe(left)
-        .intersect(right_bed, loj=True)
-        .to_dataframe(names=left_cols + right_cols, na_values=na_vals, dtype=dtypes),
-    )
-    # Bedtools intersect will use -1 for NULL in the case of numeric columns. I
-    # suppose this makes sense since any "real" bed columns (according to the
-    # "spec") will always be positive integers or strings. Since -1 might be a
-    # real value and not a missing one in my case, use the chr field to figure
-    # out if a row is "missing" and fill NaNs accordingly
-    new_cols = new_df.columns[left_width:]
-    new_pky = new_cols[:3]
-    new_chr = new_pky[0]
-    new_data_cols = new_cols[3:]
-    new_df.loc[:, new_data_cols] = new_df[new_data_cols].where(
-        new_df[new_chr] != ".", np.nan
-    )
-
-    logger.info("Annotations added: %s\n", ", ".join(new_data_cols.tolist()))
-
-    return new_df.drop(columns=new_pky)
+Stream = Generator[list[str], None, None]
 
 
-def intersect_tsvs(
-    config: cfg.StratoMod,
-    ifile: str,
-    ofile: str,
-    tsv_paths: list[str],
-) -> None:
-    target_df = pd.read_table(ifile)
-    new_df = reduce(left_outer_intersect, tsv_paths, target_df)
-    new_df.insert(loc=0, column=cfg.VAR_IDX, value=new_df.index)
-    write_tsv(ofile, new_df)
+class Line(NamedTuple):
+    chrom: int
+    start: int
+    end: int
+    rest: list[str]
+
+
+def line_to_strs(x: Line) -> list[str]:
+    return [str(x.chrom), str(x.start), str(x.end)] + x.rest
+
+
+def strs_to_line(xs: list[str]) -> Line:
+    return Line(int(xs[0]), int(xs[1]), int(xs[2]), xs[3:])
+
+
+def split_line(s: str) -> list[str]:
+    return s.rstrip().split("\t")
+
+
+def read_variants(p: Path) -> Stream:
+    with gzip.open(p, "rt") as f:
+        for x in f:
+            yield split_line(x)
+
+
+def left_outer_intersect(left: Stream, p: Path) -> Stream:
+    """Perform a left-outer join of 'left' with contents in 'p'.
+
+    Assume that 'left' and 'p' both represent bed-like files with
+    bed coordinates in the first three columns, and also have headers.
+    Also assume both are sorted.
+
+    Join left and right if both have intervals that overlap. This is
+    roughly equivalent to "intersectBed -a 'left' -b 'p' -loj" (except
+    it can't deal with headers, hence this function)
+    """
+    rline_buffer: list[Line] = []
+
+    def left_line(s: Stream) -> Line | None:
+        return maybe(None, strs_to_line, next(s, None))
+
+    def right_line(s: IO[str]) -> Line | None:
+        try:
+            return rline_buffer.pop(0)
+        except IndexError:
+            return maybe(
+                None, lambda x: strs_to_line(x.rstrip().split("\t")), next(s, None)
+            )
+
+    with gzip.open(p, "rt") as f:
+        # TODO this will cryptically fail if the header happens to be blank
+        lheader = next(left)
+        rheader = next(f).rstrip().split("\t")[3:]
+        yield lheader + rheader
+
+        blank = [""] * len(rheader)
+        lline = left_line(left)
+        rline = right_line(f)
+        while lline is not None and rline is not None:
+            # If right has greater chromosome, there is nothing in the right
+            # side to join so return left line with blanks
+            if lline.chrom < rline.chrom:
+                yield line_to_strs(lline) + blank
+                lline = left_line(left)
+
+            # Left chrom >= right chrom
+            else:
+                # Throw away all the right side until chroms are equal and the
+                # end of the right interval is greater than the left start.
+                while rline is not None and not (
+                    lline.chrom == rline.chrom and lline.start < rline.end
+                ):
+                    rline = right_line(f)
+
+                # Bail if we happen to exhaust the right side completely
+                if rline is None:
+                    break
+
+                # If the left end is greater than the right start, then they
+                # overlap. In this case return the left with the right appended.
+                if lline.end > rline.start:
+                    first_rline = rline
+                    tmp: list[Line] = []
+                    yield line_to_strs(lline) + rline.rest
+                    # Continue to loop through right side for this left interval
+                    # since multiple on the right may overlap.
+                    while (rline := right_line(f)) is not None:
+                        tmp.append(rline)
+                        if lline.end > rline.start:
+                            yield line_to_strs(lline) + rline.rest
+                        else:
+                            break
+                    # Since the next left interval might start at the exact same
+                    # position as the current left interval, save all the right
+                    # intervals through which we iterated here by adding them
+                    # to a temp buffer which will be read before the next line
+                    # in the file.
+                    rline_buffer = tmp + rline_buffer
+                    # Start at the exact same right interval next time
+                    rline = first_rline
+                    lline = left_line(left)
+                # Otherwise, the right interval is beyond the left,
+                # in which case return left with blanks and get a new left
+                # interval.
+                else:
+                    yield line_to_strs(lline) + blank
+                    lline = left_line(left)
+
+    # if we run out of lines on the right, loop through the rest of the left
+    # and return blanks
+    while lline is not None:
+        yield line_to_strs(lline) + blank
+        lline = left_line(left)
+
+
+def write_annotations(xs: Stream, p: Path) -> None:
+    with gzip.open(p, "wt") as f:
+        header = next(xs)
+        f.write("\t".join([cfg.VAR_IDX, *header]) + "\n")
+        for i, x in enumerate(xs):
+            f.write("\t".join([str(i), *x]) + "\n")
 
 
 def main(smk: Any, config: cfg.StratoMod) -> None:
-    fs = smk.input.features
-    vcf = smk.input.variants[0]
+    fs = [Path(p) for p in smk.input.features]
+    vcf = Path(smk.input.variants[0])
     logger.info("Adding annotations to %s\n", vcf)
-    intersect_tsvs(config, vcf, smk.output[0], fs)
+    write_annotations(
+        reduce(left_outer_intersect, fs, read_variants(vcf)),
+        Path(smk.output[0]),
+    )
 
 
 main(snakemake, snakemake.config)  # type: ignore
