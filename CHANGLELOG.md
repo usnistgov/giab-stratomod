@@ -1,3 +1,7 @@
+# 8.4.4
+
+- minor documentation fixes
+
 # 8.4.3
 
 - make curl commands fail upon non-2xx return codes
