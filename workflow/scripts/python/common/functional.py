@@ -21,3 +21,10 @@ def maybe(default: Y, f: Callable[[X], Y], x: Optional[X]) -> Y:
 
 def flip(f: Callable[[X, Y], Z]) -> Callable[[Y, X], Z]:
     return lambda y, x: f(x, y)
+
+
+class DesignError(Exception):
+    """Exception raised when the code is designed incorrectly (ie the 'this
+    should not happen' error)"""
+
+    pass

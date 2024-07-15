@@ -39,6 +39,7 @@ rule get_mappability:
             expand_refkey_from_refsetkey,
             rules.download_mappability_high.output[0],
         ),
+        genome=rules.fasta_to_genome.output,
     output:
         high=ensure(map_res / "mappability_high.tsv.gz", non_empty=True),
         low=ensure(map_res / "mappability_low_no_high.tsv.gz", non_empty=True),

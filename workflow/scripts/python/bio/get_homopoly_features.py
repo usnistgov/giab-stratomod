@@ -2,57 +2,9 @@ import os
 import threading as tr
 import gzip
 from pathlib import Path
-import subprocess as sp
+from typing import Any
 import common.config as cfg
-from typing import Any, IO
-
-
-def spawn_stream(
-    cmd: list[str],
-    i: IO[bytes] | int | None = None,
-) -> tuple[sp.Popen[bytes], IO[bytes]]:
-    p = sp.Popen(cmd, stdin=i, stdout=sp.PIPE, stderr=sp.PIPE)
-    # ASSUME since we typed the inputs so that the stdin/stdout can only take
-    # file descriptors or file streams, the return for each will never be
-    # none
-    if p.stdout is None:
-        raise
-    return p, p.stdout
-
-
-def check_processes(
-    ps: list[sp.Popen[bytes] | sp.CompletedProcess[bytes]], log: Path
-) -> None:
-    some_error = False
-    # TODO make parent directory if it doesn't exist? probably won't be necessary
-    with open(log, "w") as lf:
-        for p in ps:
-            if isinstance(p, sp.CompletedProcess):
-                err = p.stderr
-            else:
-                _, err = p.communicate()  # break deadlocks if there are any
-            if p.returncode != 0:
-                some_error = True
-
-                args = p.args
-                if isinstance(args, list):
-                    cmd = " ".join(args)
-                elif isinstance(args, bytes):
-                    cmd = args.decode()
-                else:
-                    cmd = str(args)
-                if err:
-                    lf.write(f"{cmd}: {err.decode()}\n")
-                else:
-                    lf.write(f"{cmd}: return code {p.returncode}\n")
-
-    if some_error:
-        exit(1)
-
-
-# logger = setup_logging(snakemake.log[0])  # type: ignore
-
-# temporary columns used for dataframe processing
+from common.io import spawn_stream, check_processes
 
 SLOP = 1
 
@@ -118,8 +70,12 @@ def merge_base(
                 end = int(s[2])
                 perfect_length = int(s[3])
                 real_length = end - start - SLOP * 2
-                frac = 1 - perfect_length / real_length
-                newline = [*s[:3], str(real_length).encode(), str(frac).encode()]
+                imperfect_frac = 1 - perfect_length / real_length
+                newline = [
+                    *s[:3],
+                    str(real_length).encode(),
+                    str(imperfect_frac).encode(),
+                ]
                 oh.write(b"\t".join(newline) + b"\n")
 
             check_processes([p1, p2], log)

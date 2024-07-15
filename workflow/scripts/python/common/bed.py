@@ -1,14 +1,17 @@
 import logging
+import contextlib
+import os
 import csv
 import gzip
 from threading import Thread
 from pathlib import Path
-from typing import TypeVar, Callable, IO, Any
+from typing import TypeVar, Callable, IO, Any, Generator
 from itertools import product
 from more_itertools import unzip
 import pandas as pd
 import common.config as cfg
 from common.io import temp_fifo
+from common.functional import DesignError
 from pybedtools import BedTool as bt  # type: ignore
 from Bio import bgzf  # type: ignore
 
@@ -165,3 +168,50 @@ def merge_and_apply_stats(
         bt.from_dataframe(bed_df).merge(c=full_cols, o=full_opts),
         full_headers,
     )
+
+
+# def write_bed_stream(h: IO[str], df: pd.DataFrame) -> None:
+#     """Stream bed to handle from a dataframe.
+
+#     Dataframe is not checked to make sure it is a "real" bed file.
+#     """
+#     df.to_csv(h, sep="\t", header=False, index=False)
+#     # for r in df.itertuples(index=False):
+#     #     h.write("\t".join(r) + "\n")
+
+
+@contextlib.contextmanager
+def bed_to_stream(df: pd.DataFrame) -> Generator[IO[bytes], None, None]:
+    """Transform bed-like dataframe into a bytestream.
+
+    This is useful for using a pandas dataframe in a bedtools subprocess.
+    """
+    r, w = os.pipe()
+    _r = os.fdopen(r, "rb")
+    _w = os.fdopen(w, "w")
+
+    # NOTE: python threads can't pass exceptions between themselves and the
+    # calling thread, so need to hack something to signal when something bad
+    # happens. Do this by closing read side of the thread (which will also make
+    # any process that depends on the pipe die since it can't be opened after
+    # we close it), and then testing if the read end is closed after the context
+    # block.
+    def read_df() -> None:
+        try:
+            df.to_csv(_w, sep="\t", header=False, index=False)
+            # write_bed_stream(_w, df)
+        except Exception:
+            _r.close()
+        finally:
+            _w.close()
+
+    t = Thread(target=read_df)
+    t.start()
+
+    try:
+        yield _r
+        if _r.closed:
+            raise DesignError("bed stream thread exited unexpectedly")
+    finally:
+        _r.close()
+        _w.close()

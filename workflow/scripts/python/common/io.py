@@ -1,8 +1,9 @@
 import gzip
 import os
 from tempfile import mkdtemp
+import subprocess as sp
 import hashlib
-from typing import Callable, TextIO, TypeVar, Generator
+from typing import Callable, TextIO, TypeVar, Generator, IO
 from pathlib import Path
 from logging import Logger
 from contextlib import contextmanager
@@ -91,3 +92,46 @@ def setup_logging(path: str, console: bool = False) -> Logger:
     if console:
         logger.addHandler(logging.StreamHandler())
     return logger
+
+
+def spawn_stream(
+    cmd: list[str],
+    i: IO[bytes] | int | None = None,
+) -> tuple[sp.Popen[bytes], IO[bytes]]:
+    p = sp.Popen(cmd, stdin=i, stdout=sp.PIPE, stderr=sp.PIPE)
+    # ASSUME since we typed the inputs so that the stdin/stdout can only take
+    # file descriptors or file streams, the return for each will never be
+    # none
+    if p.stdout is None:
+        raise
+    return p, p.stdout
+
+
+def check_processes(
+    ps: list[sp.Popen[bytes] | sp.CompletedProcess[bytes]], log: Path
+) -> None:
+    some_error = False
+    # TODO make parent directory if it doesn't exist? probably won't be necessary
+    with open(log, "w") as lf:
+        for p in ps:
+            if isinstance(p, sp.CompletedProcess):
+                err = p.stderr
+            else:
+                _, err = p.communicate()  # break deadlocks if there are any
+            if p.returncode != 0:
+                some_error = True
+
+                args = p.args
+                if isinstance(args, list):
+                    cmd = " ".join(args)
+                elif isinstance(args, bytes):
+                    cmd = args.decode()
+                else:
+                    cmd = str(args)
+                if err:
+                    lf.write(f"{cmd}: {err.decode()}\n")
+                else:
+                    lf.write(f"{cmd}: return code {p.returncode}\n")
+
+    if some_error:
+        exit(1)
