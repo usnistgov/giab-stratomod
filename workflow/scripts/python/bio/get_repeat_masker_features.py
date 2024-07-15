@@ -1,55 +1,74 @@
-import pandas as pd
+import os
+import gzip
+from threading import Thread
 from pathlib import Path
-from typing import Optional, Any
+from typing import Any
 import common.config as cfg
-from pybedtools import BedTool as bt  # type: ignore
-from common.tsv import write_tsv
-from common.io import setup_logging
-from common.bed import read_bed
+from common.io import spawn_stream, check_processes
+from common.functional import maybe
 
 # The repeat masker database is documented here:
 # https://genome.ucsc.edu/cgi-bin/hgTables?db=hg38&hgta_group=rep&hgta_track=rmsk&hgta_table=rmsk&hgta_doSchema=describe+table+schema
-
-logger = setup_logging(snakemake.log[0])  # type: ignore
-
-# both of these columns are temporary and used to make processing easier
-CLASSCOL = "_repClass"
-FAMCOL = "_repFamily"
 
 
 def main(smk: Any, config: cfg.StratoMod) -> None:
     rsk = cfg.RefsetKey(smk.wildcards["refset_key"])
     rk = config.refsetkey_to_refkey(rsk)
     src = config.references[rk].feature_data.repeat_masker
-    cs = config.refsetkey_to_chr_indices(rsk)
 
-    def read_rmsk_df(path: Path) -> pd.DataFrame:
-        cols = {11: CLASSCOL, 12: FAMCOL}
-        return read_bed(path, src.params, cols, cs)
-
-    def merge_and_write_group(
-        df: pd.DataFrame,
-        groupcol: str,
-        clsname: str,
-        famname: Optional[str] = None,
-    ) -> None:
-        groupname = clsname if famname is None else famname
-        dropped = df[df[groupcol] == groupname].drop(columns=[groupcol])
-        merged = bt.from_dataframe(dropped).merge().to_dataframe(names=cfg.BED_COLS)
+    def merge_and_write_group(clsname: str, famname: str | None = None) -> None:
         col = config.feature_definitions.repeat_masker.fmt_name(src, clsname, famname)
-        merged[col] = merged[cfg.BED_END] - merged[cfg.BED_START]
-        write_tsv(smk.output[0], merged, header=True)
+        c = clsname.encode()
+        f = maybe(None, lambda s: s.encode(), famname)
+        i = smk.input[0]
+        o = smk.output[0]
+        with gzip.open(i, "r") as ih, gzip.open(o, "w") as oh:
+            # write header
+            oh.write(("\t".join([*cfg.BED_COLS, col]) + "\n").encode())
+
+            try:
+                r, w = os.pipe()
+                r0 = os.fdopen(r, "rb")
+                w0 = os.fdopen(w, "wb")
+
+                # 1. Filter stream for class and/or family (if present). Assume
+                # stream has columns: chrom, start, end, class, family. Only
+                # write the first 3 columns.
+                def filter_base() -> None:
+                    try:
+                        for x in ih:
+                            s = x.rstrip().split(b"\t")
+                            if c == s[3] and (f is None or f == s[4]):
+                                w0.write(b"\t".join(s[:3]) + b"\n")
+                    except Exception:
+                        r0.close()
+                    finally:
+                        w0.close()
+
+                t1 = Thread(target=filter_base)
+                t1.start()
+
+                p1, o1 = spawn_stream(["mergeBed", "-i", "stdin"], r0)
+
+                for x in o1:
+                    s = x.rstrip().split(b"\t")
+                    start = int(s[1])
+                    end = int(s[2])
+                    newline = [*s, str(end - start).encode()]
+                    oh.write(b"\t".join(newline) + b"\n")
+
+                check_processes([p1], Path(smk.log[0]))
+            finally:
+                r0.close()
+                w0.close()
 
     cls = smk.wildcards.rmsk_class
-    df = read_rmsk_df(smk.input[0])
 
     try:
         fam = smk.wildcards.rmsk_family
-        logger.info("Filtering/merging rmsk family %s/class %s", fam, cls)
-        merge_and_write_group(df, FAMCOL, cls, fam)
+        merge_and_write_group(cls, fam)
     except AttributeError:
-        logger.info("Filtering/merging rmsk class %s", cls)
-        merge_and_write_group(df, CLASSCOL, cls)
+        merge_and_write_group(cls)
 
 
 main(snakemake, snakemake.config)  # type: ignore

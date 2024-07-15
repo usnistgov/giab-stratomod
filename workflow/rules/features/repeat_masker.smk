@@ -23,9 +23,22 @@ use rule download_mappability_high as download_repeat_masker with:
     localrule: True
 
 
-rule get_repeat_masker_classes:
+rule standardize_rmsk:
     input:
         partial(expand_refkey_from_refsetkey, rules.download_repeat_masker.output),
+    output:
+        rmsk_res / "rmsk_filtered.tsv.gz",
+    benchmark:
+        rmsk_log / "filter.bench"
+    conda:
+        "../../envs/bio.yml"
+    script:
+        "../../scripts/python/bio/standardize_rmsk.py"
+
+
+rule get_repeat_masker_classes:
+    input:
+        rules.standardize_rmsk.output,
     output:
         rmsk_res / class_file("tsv.gz"),
     log:
