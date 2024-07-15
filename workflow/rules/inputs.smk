@@ -68,7 +68,8 @@ rule filter_sort_ref:
     output:
         config.refset_res_dir(log=False) / "ref.fa.gz",
     log:
-        config.refset_res_dir(log=True) / "filter_sort_ref.log",
+        convert=config.refset_res_dir(log=True) / "filter_sort_ref_convert.log",
+        index=config.refset_res_dir(log=True) / "filter_sort_ref_index.log",
     conda:
         "../envs/bio.yml"
     script:
