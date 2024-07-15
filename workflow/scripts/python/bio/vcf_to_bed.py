@@ -1,8 +1,6 @@
+import gzip
 from typing import Any, TextIO
 import common.config as cfg
-from common.io import with_gzip_maybe, setup_logging
-
-logger = setup_logging(snakemake.log[0])  # type: ignore
 
 
 def is_real(s: str) -> bool:
@@ -54,6 +52,7 @@ def lookup_field(f: cfg.FormatField, d: dict[str, str]) -> str:
 
 def line_to_bed_row(
     fo: TextIO,
+    lo: TextIO,
     ls: list[str],
     vcf: cfg.UnlabeledVCFQuery,
     vtk: cfg.VartypeKey,
@@ -79,12 +78,12 @@ def line_to_bed_row(
 
     # remove cases where ref and alt are equal (which is what "." means)
     if alt == "." or ref == alt:
-        logger.info("Skipping equal variant at %s, %s", chrom, start)
+        lo.write(f"Skipping equal variant at {chrom}, {start}\n")
         return False
 
     # remove multiallelics
     if "," in alt:
-        logger.info("Skipping multiallelic variant at %s, %s", chrom, start)
+        lo.write(f"Skipping multiallelic variant at {chrom}, {start}\n")
         return False
 
     # remove anything that doesn't pass out length filters
@@ -92,7 +91,7 @@ def line_to_bed_row(
     alt_len = len(alt)
 
     if ref_len > vcf.max_ref or alt_len > vcf.max_alt:
-        logger.info("Skipping oversized variant at %s, %s", chrom, start)
+        lo.write(f"Skipping oversized variant at {chrom}, {start}\n")
         return False
 
     # keep only the variant type we care about
@@ -112,7 +111,7 @@ def line_to_bed_row(
         # ASSUME any FORMAT/SAMPLE columns with different lengths are screwed
         # up in some way
         if len(fmt_col) != len(smpl_col):
-            logger.error("FORMAT/SAMPLE have different lengths at %s, %s", chrom, start)
+            lo.write(f"FORMAT/SAMPLE have different lengths at {chrom}, {start}\n")
             return True
         d = dict(zip(fmt_col, smpl_col))
         parsed_field_values = [lookup_field(f, d) for f in parse_fields]
@@ -139,7 +138,7 @@ def line_to_bed_row(
     return False
 
 
-def parse(smk: Any, sconf: cfg.StratoMod, fi: TextIO, fo: TextIO) -> None:
+def parse(smk: Any, sconf: cfg.StratoMod, fi: TextIO, fo: TextIO, lo: TextIO) -> None:
     defs = sconf.feature_definitions
     vcf = sconf.querykey_to_vcf(cfg.LabeledQueryKey(smk.params.query_key))
     vtk = cfg.VartypeKey(smk.wildcards.vartype_key)
@@ -183,6 +182,7 @@ def parse(smk: Any, sconf: cfg.StratoMod, fi: TextIO, fo: TextIO) -> None:
 
         err = line_to_bed_row(
             fo,
+            lo,
             ln.rstrip().split("\t"),
             vcf,
             vtk,
@@ -198,11 +198,11 @@ def parse(smk: Any, sconf: cfg.StratoMod, fi: TextIO, fo: TextIO) -> None:
 
 
 def main(smk: Any, config: cfg.StratoMod) -> None:
-    with_gzip_maybe(
-        lambda i, o: parse(smk, config, i, o),
-        str(smk.input[0]),
-        str(smk.output[0]),
-    )
+    i = gzip.open(smk.input[0], "rt")
+    o = gzip.open(smk.output[0], "wt")
+    g = open(smk.log[0], "w")
+    with i as ih, o as oh, g as gh:
+        parse(smk, config, ih, oh, gh)
 
 
 main(snakemake, snakemake.config)  # type: ignore
