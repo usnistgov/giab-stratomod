@@ -47,6 +47,7 @@ labeled_queries:
     # The location from which to retrieve this query vcf
     src:
       url: https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/HG002_NA24385_son/NISTv4.2.1/GRCh37/SupplementaryFiles/inputvcfsandbeds/HG002_GRCh37_1_22_PacBio_HiFi_DeepVariant.vcf.gz
+      md5: 7eccde405dd37cb7eb08afb1eeae7be5
 
     # The benchmark that should be applied to this vcf to produce labels. For
     # valid keys, see static.yml. It is assumed that the user will make a sane
@@ -107,6 +108,7 @@ labeled_queries:
     chr_prefix: chr
     src:
       url: https://storage.googleapis.com/brain-genomics-public/research/sequencing/grch38/vcf/hiseqx/wgs_pcr_free/40x/HG002.hiseqx.pcr-free.40x.deepvariant-v1.0.grch38.vcf.gz
+      md5: 3265c607993a3e5bc497c1096754b935
     split_biallelics: true
     benchmark: HG002_v421
     variables:
@@ -441,6 +443,7 @@ references:
       # The location of the referenece
       src:
         url: https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/references/GRCh37/hs37d5.fa.gz
+        md5: 12a0bed94078e2d9e8c00da793bbc84e
 
       # The prefix used for chromosomes in this sdf.
       chr_prefix: ""

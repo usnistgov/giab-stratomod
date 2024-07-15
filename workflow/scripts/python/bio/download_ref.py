@@ -73,7 +73,7 @@ def main(smk: Any, params: Any) -> None:
         assert_never(src)
 
     if src.md5 is not None:
-        actual = get_md5(opath) if is_fasta else get_md5_dir(opath)
+        actual = get_md5(opath, True) if is_fasta else get_md5_dir(opath)
         if actual != src.md5:
             log.error("md5s don't match; wanted %s, actual %s", src.md5, actual)
             exit(1)

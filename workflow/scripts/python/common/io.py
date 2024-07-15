@@ -75,9 +75,10 @@ def with_gzip_maybe(f: Callable[[TextIO, TextIO], X], i: str, o: str) -> X:
         return f(fi, fo)
 
 
-def get_md5(path: Path) -> str:
+def get_md5(p: Path, unzip: bool = False) -> str:
     h = hashlib.md5()
-    with open(path, "rb") as f:
+    do_unzip = p.name.endswith(".gz") and unzip is True
+    with gzip.open(p, "rb") if do_unzip else open(p, "rb") as f:
         for chunk in iter(lambda: f.read(4096), b""):
             h.update(chunk)
     return h.hexdigest()

@@ -54,7 +54,7 @@ def main(opath: Path, src: cfg.FileSrc | None) -> None:
     else:
         assert_never(src)
 
-    if src.md5 is not None and src.md5 != (actual := get_md5(opath)):
+    if src.md5 is not None and src.md5 != (actual := get_md5(opath, True)):
         log.error("md5s don't match; wanted %s, actual %s", src.md5, actual)
         exit(1)
 
