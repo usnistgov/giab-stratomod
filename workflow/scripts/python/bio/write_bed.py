@@ -1,9 +1,9 @@
+import gzip
 import common.config as cfg
-from Bio import bgzf  # type: ignore
 
 
 def main(opath: str, regions: list[cfg.BedRegion]) -> None:
-    with bgzf.open(opath, "w") as f:
+    with gzip.open(opath, "wt") as f:
         for r in sorted(regions):
             f.write(r.fmt() + "\n")
 
