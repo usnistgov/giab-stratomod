@@ -1,48 +1,47 @@
+import gzip
+import os
 import re
+from threading import Thread
 from pathlib import Path
-import subprocess as sp
-from typing import Any, cast, IO, NamedTuple
+from typing import Any, IO, NamedTuple
 from common.config import StratoMod, RefsetKey, VCFFile
-from common.bed import with_bgzip_maybe
-from common.io import setup_logging
+from common.io import bgzip_file, spawn_stream, check_processes
 
-log = setup_logging(snakemake.log["filtered"])  # type: ignore
+NORMCMD = ["bcftools", "norm", "--multiallelics", "-"]
 
 
 class Env(NamedTuple):
     refsetkey: RefsetKey
     vcf: VCFFile
     config: StratoMod
-    split_log: Path
 
 
-def fix_DV_refcall(filter_col: str, sample_col: str) -> str:
+def fix_DV_refcall(filter_col: bytes, sample_col: bytes) -> bytes:
     return (
-        sample_col.replace("./.", "0/1").replace("0/0", "0/1")
-        if filter_col == "RefCall"
+        sample_col.replace(b"./.", b"0/1").replace(b"0/0", b"0/1")
+        if filter_col == b"RefCall"
         else sample_col
     )
 
 
 def strip_format_fields(
     fields: set[str],
-    format_col: str,
-    sample_col: str,
-) -> tuple[str, str]:
+    format_col: bytes,
+    sample_col: bytes,
+) -> tuple[bytes, bytes]:
     f, s = zip(
         *[
             (f, s)
-            for f, s in zip(format_col.split(":"), sample_col.split(":"))
-            if f not in fields
+            for f, s in zip(format_col.split(b":"), sample_col.split(b":"))
+            if f.decode() not in fields
         ]
     )
-    return (":".join(f), ":".join(s))
+    return (b":".join(f), b":".join(s))
 
 
-def filter_file(env: Env, fi: IO[str], fo: IO[str]) -> None:
+def filter_file(env: Env, fi: IO[bytes], fo: IO[bytes], log: IO[str]) -> None:
     chr_prefix = env.vcf.chr_prefix
     cs = env.config.refsetkey_to_chr_indices(env.refsetkey)
-
     chr_mapper = {c.chr_name_full(chr_prefix): c.value for c in cs}
 
     for ln in fi:
@@ -50,30 +49,34 @@ def filter_file(env: Env, fi: IO[str], fo: IO[str]) -> None:
         # it has a contig parameter (these must be changed to reflect the
         # integer chromosome numbers we are about to assign as some tools will
         # complain if there is a mismatch)
-        if ln.startswith("#"):
+        if ln.startswith(b"#"):
             # If a contig line, change the ID field (and hopefully leave
             # everything else as-is).
-            if cmatch := re.match("##contig=<(.*)>", ln):
+            if cmatch := re.match("##contig=<(.*)>", ln.decode()):
                 contig_matches = [
                     re.match("(.*)=(.*)", c) for c in cmatch[1].split(",")
                 ]
                 if any([x for x in contig_matches if x is None]):
-                    log.error("Invalid contig line: %s" % ln)
+                    log.write("Invalid contig line: %s" % ln.decode())
                     exit(1)
-                contig_map = {x[1]: x[2] for x in contig_matches if x is not None}
+                contig_map: dict[str, str] = {
+                    x[1]: x[2] for x in contig_matches if x is not None
+                }
                 if "ID" not in contig_map:
-                    log.error("ID field not in contig line: %s" % ln)
+                    log.write("ID field not in contig line: %s" % ln.decode())
                     exit(1)
                 try:
                     contig_map["ID"] = chr_mapper[contig_map["ID"]]
                     new_contig = ",".join([f"{k}={v}" for k, v in contig_map.items()])
-                    fo.write(f"##contig=<{new_contig}>\n")
+                    fo.write((f"##contig=<{new_contig}>\n").encode())
                 except KeyError:
                     pass
+                except Exception as e:
+                    log.write(str(e))
             else:
                 fo.write(ln)
         else:
-            ls = ln.rstrip().split("\t")[:10]
+            ls = ln.rstrip().split(b"\t")[:10]
             # CHROM = 0
             # POS = 1
             # ID = 2
@@ -85,55 +88,56 @@ def filter_file(env: Env, fi: IO[str], fo: IO[str]) -> None:
             # FORMAT = 8
             # SAMPLE = 9
             try:
-                ls[0] = str(chr_mapper[ls[0]])
+                ls[0] = str(chr_mapper[ls[0].decode()]).encode()
+                # optionally fix the GT field for filtered variants
                 if env.vcf.corrections.fix_refcall_gt:
                     ls[9] = fix_DV_refcall(ls[6], ls[9])
+                # optionally remove some fields in FORMAT/SAMPLE
                 if len(env.vcf.corrections.strip_format_fields) > 0:
                     ls[8], ls[9] = strip_format_fields(
                         env.vcf.corrections.strip_format_fields,
                         ls[8],
                         ls[9],
                     )
-                fo.write("\t".join(ls) + "\n")
+                fo.write(b"\t".join(ls) + b"\n")
             except KeyError:
                 pass
-
-
-def split_biallelics_and_filter_file(env: Env, fi: IO[str], fo: IO[str]) -> None:
-    with open(env.split_log, "wt") as lo:
-        cmd = ["bcftools", "norm", "--multiallelics", "-"]
-        p = sp.Popen(cmd, stdin=sp.PIPE, stdout=fo, stderr=lo, text=True)
-        if p.stdin is not None:
-            filter_file(env, fi, p.stdin)
-            # manually close stdin to let the process exit; I could do this
-            # also probably by letting the context managers scope out but then
-            # don't get a nice containerized function
-            p.stdin.close()
-            p.wait()
-            if p.returncode != 0:
-                log.error("error when splitting bialellics")
-        else:
-            assert False, "this should not happen"
 
 
 def main(smk: Any, config: StratoMod) -> None:
     env = Env(
         refsetkey=RefsetKey(smk.wildcards["refset_key"]),
-        vcf=cast(VCFFile, smk.params.vcf),
+        vcf=smk.params.vcf,
         config=config,
-        split_log=smk.log["split"],
     )
+    out = Path(smk.output[0])
 
-    if env.vcf.split_biallelics:
-        action = split_biallelics_and_filter_file
-    else:
-        action = filter_file
+    with gzip.open(smk.input[0], "rb") as i, open(smk.log["filtered"], "w") as lo:
+        r, w = os.pipe()
+        r0 = os.fdopen(r, "rb")
+        w0 = os.fdopen(w, "wb")
+        try:
 
-    with_bgzip_maybe(
-        lambda i, o: action(env, i, o),
-        str(smk.input[0]),
-        str(smk.output[0]),
-    )
+            def go() -> None:
+                try:
+                    filter_file(env, i, w0, lo)
+                except Exception:
+                    r0.close()
+                finally:
+                    w0.close()
+
+            t1 = Thread(target=go)
+            t1.start()
+
+            if env.vcf.split_biallelics:
+                p1, o1 = spawn_stream(NORMCMD, r0)  # NORM!!!!!!
+                bgzip_file(o1, out)
+                check_processes([p1], Path(smk.log["split"]))
+            else:
+                bgzip_file(r0, out)
+        finally:
+            r0.close()
+            w0.close()
 
 
 main(snakemake, snakemake.config)  # type: ignore

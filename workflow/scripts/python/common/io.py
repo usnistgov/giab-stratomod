@@ -1,27 +1,67 @@
 import gzip
-import os
-from tempfile import mkdtemp
 import subprocess as sp
 import hashlib
-from typing import Callable, TextIO, TypeVar, Generator, IO
+from typing import Callable, TextIO, TypeVar, IO
 from pathlib import Path
 from logging import Logger
-from contextlib import contextmanager
+from common.functional import DesignError
 
 X = TypeVar("X")
 
 
-@contextmanager
-def temp_fifo() -> Generator[Path, None, None]:
-    """Context Manager for creating named pipes with temporary names."""
-    tmpdir = mkdtemp()
-    filename = Path(tmpdir) / "fifo"
-    os.mkfifo(filename)
-    try:
-        yield filename
-    finally:
-        os.unlink(filename)
-        os.rmdir(tmpdir)
+def is_gzip_stream(i: IO[bytes]) -> bool:
+    return i.read(2) == b"\x1f\x8b"
+
+
+def is_bgzip_stream(i: IO[bytes]) -> bool:
+    return i.read(4) == b"\x1f\x8b\x08\x04"
+
+
+def is_gzip(p: Path) -> bool:
+    # test if gzip by trying to read first byte
+    with open(p, "rb") as f:
+        return is_gzip_stream(f)
+
+
+def is_bgzip(p: Path) -> bool:
+    # since bgzip is in blocks (vs gzip), determine if in bgzip by
+    # attempting to seek first block
+    with open(p, "rb") as f:
+        return is_bgzip_stream(f)
+
+
+def bgzip(i: IO[bytes], o: IO[bytes]) -> sp.CompletedProcess[bytes]:
+    """Stream bgzip to endpoint.
+
+    NOTE: this will block since this is almost always going to be the
+    final step in a pipeline.
+    """
+    return sp.run(["bgzip", "-c"], stdin=i, stdout=o)
+
+
+def bgzip_file(
+    i: IO[bytes],
+    p: Path,
+    parents: bool = True,
+) -> sp.CompletedProcess[bytes]:
+    # make parent directory as necessary since snakemake won't make the parent
+    # in the case of checkpoints where the output files aren't fully known at
+    # parsetime
+    p.parent.mkdir(parents=parents, exist_ok=True)
+    with open(p, "wb") as f:
+        return bgzip(i, f)
+
+
+def gunzip(i: Path) -> tuple[sp.Popen[bytes], IO[bytes]]:
+    """Stream bgzip to endpoint.
+
+    NOTE: this will block since this is almost always going to be the
+    final step in a pipeline.
+    """
+    p = sp.Popen(["gunzip", "-c", i], stdout=sp.PIPE)
+    if p.stdout is None:
+        raise DesignError()
+    return (p, p.stdout)
 
 
 def with_gzip_maybe(f: Callable[[TextIO, TextIO], X], i: str, o: str) -> X:
@@ -69,16 +109,6 @@ def get_md5_dir(path: Path) -> str:
     for p in ps:
         h.update(get_md5(p).encode())
     return h.hexdigest()
-
-
-def is_gzip(p: Path) -> bool:
-    # test if gzip by trying to read first byte
-    with gzip.open(p, "r") as f:
-        try:
-            f.read(1)
-            return True
-        except gzip.BadGzipFile:
-            return False
 
 
 # set up basic logger that prints to both console and a file (the log directive

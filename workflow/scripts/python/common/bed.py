@@ -1,61 +1,17 @@
 import contextlib
 import os
-import csv
-import gzip
 import subprocess as sp
 from threading import Thread
 from pathlib import Path
-from typing import TypeVar, Callable, IO, Any, Generator
+from typing import TypeVar, IO, Generator
 from itertools import product
 import pandas as pd
 import common.config as cfg
-from common.io import temp_fifo, spawn_stream
+from common.io import spawn_stream
 from common.functional import DesignError
-from Bio import bgzf  # type: ignore
 
 
 X = TypeVar("X")
-
-
-def is_bgzip(p: Path) -> bool:
-    # since bgzip is in blocks (vs gzip), determine if in bgzip by
-    # attempting to seek first block
-    with open(p, "rb") as f:
-        try:
-            next(bgzf.BgzfBlocks(f), None)
-            return True
-        except ValueError:
-            return False
-
-
-def with_bgzip_maybe(f: Callable[[IO[str], IO[str]], X], i: str, o: str) -> X:
-    # bgzf only understands latin1, so read everything as such
-    hi = (
-        gzip.open(i, "rt", encoding="latin1")
-        if i.endswith(".gz")
-        else open(i, "rt", encoding="latin1")
-    )
-    ho = bgzf.open(o, "wt") if o.endswith(".gz") else open(o, "wt")
-
-    # NOTE: the bgzip python wrapper is actually not a real file object despite
-    # the fact that it has a write() method. Writing to it as a normal file
-    # descriptor will totally bypass compression and write in plain text
-    # (surprisingly, it seems it should just blow up). To get around this, make
-    # silly loop that reads a FIFO line by line and calls write() manually. The
-    # input end of the FIFO is the presented to the callable as the 'file
-    # handle' for the bgzip-ed output path.
-    def cat_bgzip(fifo: Path, fo: Any) -> None:
-        with open(fifo, "r") as fi:
-            for ln in fi:
-                fo.write(ln)
-
-    with hi as fi, ho as fo, temp_fifo() as fifo_path:
-        t = Thread(target=cat_bgzip, args=(fifo_path, fo))
-        t.start()
-        with open(fifo_path, "w") as fifo_write:
-            res = f(fi, fifo_write)
-        t.join()
-        return res
 
 
 def read_bed(
@@ -88,17 +44,6 @@ def read_bed(
         return filter_sort_bed(f, df)
     else:
         return df
-
-
-def write_bed(path: Path, df: pd.DataFrame) -> None:
-    """Write a bed file in bgzip format from a dataframe.
-
-    Dataframe is not checked to make sure it is a "real" bed file.
-    """
-    with bgzf.open(path, "w") as f:
-        w = csv.writer(f, delimiter="\t")
-        for r in df.itertuples(index=False):
-            w.writerow(r)
 
 
 def filter_sort_bed(cfilt: cfg.ChrFilter, df: pd.DataFrame, n: int = 3) -> pd.DataFrame:
@@ -135,13 +80,6 @@ def merge_and_apply_stats(
     bed_stream: IO[bytes],
     stat_cols: list[str],
 ) -> tuple[sp.Popen[bytes], IO[bytes], list[str]]:
-    # compute stats on all columns except the first 3
-    # drop_n = 3
-    # stat_cols = bed_df.columns.tolist()[drop_n:]
-
-    # logging.info("Computing stats for columns: %s\n", stat_cols)
-    # logging.info("Stats to compute: %s\n", [x.value for x in fconf.operations])
-
     res = [
         (i + 4, m.value, fconf.fmt_merged_feature(s, m))
         for (i, s), m in product(enumerate(stat_cols), fconf.operations)
@@ -149,8 +87,6 @@ def merge_and_apply_stats(
     cols = [r[0] for r in res]
     opts = [r[1] for r in res]
     headers = [r[2] for r in res]
-    print(cols)
-    print(opts)
 
     # just use one column for count since all columns will produce the same
     # number
@@ -159,24 +95,9 @@ def merge_and_apply_stats(
     full_cols = ",".join(map(str, [4, *cols]))
     full_headers: list[str] = [*cfg.BED_COLS, fconf.count_feature[0], *headers]
 
-    # logging.info("Merging regions")
-    # TODO there might be a way to make pybedtools echo what it is doing, but
-    # for now this is a sanity check that this crazy command is executed
-    # correctly
-    # logging.info(
-    #     "Using command: 'bedtools merge -i <file> -c %s -o %s'",
-    #     ", ".join(map(str, full_cols)),
-    #     ", ".join(full_opts),
-    # )
-
     cmd = ["mergeBed", "-i", "stdin", "-c", full_cols, "-o", full_opts]
     p, o = spawn_stream(cmd, bed_stream)
     return p, o, full_headers
-
-    # return (
-    #     bt.from_dataframe(bed_df).merge(c=full_cols, o=full_opts),
-    #     full_headers,
-    # )
 
 
 @contextlib.contextmanager
