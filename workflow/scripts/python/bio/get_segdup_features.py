@@ -1,20 +1,13 @@
+import gzip
 import pandas as pd
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 import common.config as cfg
-from common.tsv import write_tsv
-from common.bed import read_bed, merge_and_apply_stats
-from common.io import setup_logging
+from common.bed import read_bed, merge_and_apply_stats, bed_to_stream
+from common.io import check_processes
 
 # This database is documented here:
 # http://genome.ucsc.edu/cgi-bin/hgTables?hgta_doSchemaDb=hg38&hgta_doSchemaTable=genomicSuperDups
-
-# ASSUME segdups dataframe is fed into this script with the chromosome column
-# standardized. The column numbers below are dictionary values, and the
-# corresponding feature names are the dictionary keys. Note that many feature
-# names don't match the original column names in the database.
-
-logger = setup_logging(snakemake.log[0])  # type: ignore
 
 
 def read_segdups(
@@ -35,20 +28,16 @@ def read_segdups(
     return read_bed(path, s.params, feature_cols, cs)
 
 
-def merge_segdups(
-    df: pd.DataFrame,
-    fconf: cfg.SegDupsGroup,
-) -> pd.DataFrame:
-    bed, names = merge_and_apply_stats(fconf, df)
-    return cast(pd.DataFrame, bed.to_dataframe(names=names))
-
-
 def main(smk: Any, config: cfg.StratoMod) -> None:
     fconf = config.feature_definitions.segdups
-    repeat_df = read_segdups(smk, config, smk.input[0], fconf)
-    merged_df = merge_segdups(repeat_df, fconf)
-    write_tsv(smk.output[0], merged_df, header=True)
+    df = read_segdups(smk, config, smk.input[0], fconf)
+    with bed_to_stream(df) as s:
+        p, o, header = merge_and_apply_stats(fconf, s, df.columns.tolist()[3:])
+        with gzip.open(smk.output[0], "wt") as oh:
+            oh.write("\t".join(header) + "\n")
+            for x in o:
+                oh.write(x.decode())
+        check_processes([p], smk.log[0])
 
 
-# TODO make a stub so I don't need to keep repeating this
 main(snakemake, snakemake.config)  # type: ignore

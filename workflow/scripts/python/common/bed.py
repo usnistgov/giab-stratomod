@@ -1,18 +1,16 @@
-import logging
 import contextlib
 import os
 import csv
 import gzip
+import subprocess as sp
 from threading import Thread
 from pathlib import Path
 from typing import TypeVar, Callable, IO, Any, Generator
 from itertools import product
-from more_itertools import unzip
 import pandas as pd
 import common.config as cfg
-from common.io import temp_fifo
+from common.io import temp_fifo, spawn_stream
 from common.functional import DesignError
-from pybedtools import BedTool as bt  # type: ignore
 from Bio import bgzf  # type: ignore
 
 
@@ -134,50 +132,51 @@ def sort_bed_numerically(df: pd.DataFrame, n: int) -> pd.DataFrame:
 
 def merge_and_apply_stats(
     fconf: cfg.MergedFeatureGroup[X],
-    bed_df: pd.DataFrame,
-) -> tuple[bt, list[str]]:
+    bed_stream: IO[bytes],
+    stat_cols: list[str],
+) -> tuple[sp.Popen[bytes], IO[bytes], list[str]]:
     # compute stats on all columns except the first 3
-    drop_n = 3
-    stat_cols = bed_df.columns.tolist()[drop_n:]
+    # drop_n = 3
+    # stat_cols = bed_df.columns.tolist()[drop_n:]
 
-    logging.info("Computing stats for columns: %s\n", stat_cols)
-    logging.info("Stats to compute: %s\n", [x.value for x in fconf.operations])
+    # logging.info("Computing stats for columns: %s\n", stat_cols)
+    # logging.info("Stats to compute: %s\n", [x.value for x in fconf.operations])
 
-    cols, opts, headers = unzip(
-        (i + drop_n + 1, m.value, fconf.fmt_merged_feature(s, m))
+    res = [
+        (i + 4, m.value, fconf.fmt_merged_feature(s, m))
         for (i, s), m in product(enumerate(stat_cols), fconf.operations)
-    )
+    ]
+    cols = [r[0] for r in res]
+    opts = [r[1] for r in res]
+    headers = [r[2] for r in res]
+    print(cols)
+    print(opts)
 
     # just use one column for count since all columns will produce the same
     # number
-    full_opts = ["count", *opts]
-    full_cols = [drop_n + 1, *cols]
+    full_opts = ",".join(["count", *opts])
+    # 4 since we only need to count the first of the extra columns
+    full_cols = ",".join(map(str, [4, *cols]))
     full_headers: list[str] = [*cfg.BED_COLS, fconf.count_feature[0], *headers]
 
-    logging.info("Merging regions")
+    # logging.info("Merging regions")
     # TODO there might be a way to make pybedtools echo what it is doing, but
     # for now this is a sanity check that this crazy command is executed
     # correctly
-    logging.info(
-        "Using command: 'bedtools merge -i <file> -c %s -o %s'",
-        ", ".join(map(str, full_cols)),
-        ", ".join(full_opts),
-    )
+    # logging.info(
+    #     "Using command: 'bedtools merge -i <file> -c %s -o %s'",
+    #     ", ".join(map(str, full_cols)),
+    #     ", ".join(full_opts),
+    # )
 
-    return (
-        bt.from_dataframe(bed_df).merge(c=full_cols, o=full_opts),
-        full_headers,
-    )
+    cmd = ["mergeBed", "-i", "stdin", "-c", full_cols, "-o", full_opts]
+    p, o = spawn_stream(cmd, bed_stream)
+    return p, o, full_headers
 
-
-# def write_bed_stream(h: IO[str], df: pd.DataFrame) -> None:
-#     """Stream bed to handle from a dataframe.
-
-#     Dataframe is not checked to make sure it is a "real" bed file.
-#     """
-#     df.to_csv(h, sep="\t", header=False, index=False)
-#     # for r in df.itertuples(index=False):
-#     #     h.write("\t".join(r) + "\n")
+    # return (
+    #     bt.from_dataframe(bed_df).merge(c=full_cols, o=full_opts),
+    #     full_headers,
+    # )
 
 
 @contextlib.contextmanager

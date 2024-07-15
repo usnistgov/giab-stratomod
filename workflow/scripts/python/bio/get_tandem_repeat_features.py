@@ -1,20 +1,13 @@
+import gzip
 from pathlib import Path
 import pandas as pd
-from typing import Any, cast
+from typing import Any
 import common.config as cfg
-from common.tsv import write_tsv
-from common.bed import read_bed, merge_and_apply_stats
-from common.io import setup_logging
+from common.bed import read_bed, merge_and_apply_stats, bed_to_stream
+from common.io import check_processes, spawn_stream
 
 # Input dataframe documented here:
 # https://genome.ucsc.edu/cgi-bin/hgTables?db=hg38&hgta_group=rep&hgta_track=simpleRepeat&hgta_table=simpleRepeat&hgta_doSchema=describe+table+schema
-#
-# ASSUME this dataframe is fed into this script as-is. The column numbers below
-# are dictionary values, and the corresponding feature names are the dictionary
-# keys. Note that many feature names don't match the original column names in
-# the database.
-
-logger = setup_logging(snakemake.log[0])  # type: ignore
 
 SLOP = 5
 
@@ -61,28 +54,28 @@ def read_tandem_repeats(
     # in this database; however, it turns out that at least for GRCh38 that the
     # sets of TRs where either == 1 are identical, so just use period here
     # since I can easily refer to it.
-    logger.info("Removing TRs with unitsize == 1")
+    # logger.info("Removing TRs with unitsize == 1")
     return df[df[unit_size_col] > 1]
-
-
-def merge_tandem_repeats(
-    gfile: str,
-    df: pd.DataFrame,
-    fconf: cfg.TandemRepeatGroup,
-) -> pd.DataFrame:
-    bed, names = merge_and_apply_stats(fconf, df)
-    merged_df = cast(pd.DataFrame, bed.slop(b=SLOP, g=gfile).to_dataframe(names=names))
-    len_col = fconf.length[0]
-    merged_df[len_col] = merged_df[cfg.BED_END] - merged_df[cfg.BED_START] - SLOP * 2
-    return merged_df
 
 
 def main(smk: Any, sconf: cfg.StratoMod) -> None:
     i = smk.input
     fconf = sconf.feature_definitions.tandem_repeats
-    repeat_df = read_tandem_repeats(smk, Path(i.src[0]), fconf, sconf)
-    merged_df = merge_tandem_repeats(i.genome[0], repeat_df, fconf)
-    write_tsv(smk.output[0], merged_df, header=True)
+    len_col = fconf.length[0]
+    slopcmd = ["slopBed", "-i", "stdin", "-b", str(SLOP), "-g", i.genome[0]]
+    df = read_tandem_repeats(smk, Path(i.src[0]), fconf, sconf)
+    with bed_to_stream(df) as s:
+        p0, o0, header = merge_and_apply_stats(fconf, s, df.columns.tolist()[3:])
+        p1, o1 = spawn_stream(slopcmd, o0)
+        with gzip.open(smk.output[0], "wt") as oh:
+            oh.write("\t".join([*header, len_col]) + "\n")
+            for x in o1:
+                y = x.decode().rstrip().split("\t")
+                start = int(y[1])
+                end = int(y[2])
+                newline = [*y, str(end - start - SLOP * 2)]
+                oh.write("\t".join(newline) + "\n")
+        check_processes([p0, p1], smk.log[0])
 
 
 main(snakemake, snakemake.config)  # type: ignore
