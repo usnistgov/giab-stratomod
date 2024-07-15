@@ -3,8 +3,7 @@ import subprocess as sp
 from typing import Callable, Any, cast
 from typing_extensions import assert_never
 from tempfile import NamedTemporaryFile as Tmp
-from common.io import is_gzip, setup_logging, get_md5, get_md5_dir
-from common.bed import is_bgzip
+from common.io import is_gzip, is_bgzip, setup_logging, get_md5, get_md5_dir
 import common.config as cfg
 
 
