@@ -2019,8 +2019,16 @@ class StratoMod(_BaseModel):
         )
 
     @property
-    def all_refkeys(self) -> set[str]:
+    def all_refkeys(self) -> set[RefKey]:
         return set(map(self.refsetkey_to_refkey, self.all_refsetkeys))
+
+    @property
+    def all_sdf_refkeys(self) -> set[RefKey]:
+        return set([k for k in self.all_refkeys if not self.references[k].sdf.is_fasta])
+
+    @property
+    def all_fasta_refkeys(self) -> set[RefKey]:
+        return set([k for k in self.all_refkeys if self.references[k].sdf.is_fasta])
 
     @property
     def _all_model_combos(self) -> tuple[list[TrainKeyCombo], list[TestKeyCombo]]:

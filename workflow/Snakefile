@@ -52,9 +52,10 @@ rule all_resources:
             ],
         ),
         # reference and reference-dependent feature data
+        expand(rules.download_ref_sdf.output, ref_key=config.all_sdf_refkeys),
+        expand(rules.download_ref_fasta.output, ref_key=config.all_fasta_refkeys),
         expand(
             [
-                *rules.download_ref_sdf.output,
                 *rules.download_mappability_high.output,
                 *rules.download_mappability_low.output,
                 *rules.download_repeat_masker.output,
