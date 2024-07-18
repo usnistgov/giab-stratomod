@@ -17,7 +17,7 @@ def expand_benchmark_path(path, wildcards):
 
 
 def labeled_file(ext):
-    return wildcard_format_ext(f"{{}}_{{}}", ["vartype_key", "label"], ext)
+    return wildcard_format_ext("{}_{}", ["vartype_key", "label"], ext)
 
 
 def unlabeled_file(ext):
@@ -383,9 +383,11 @@ rule concat_labeled_tsvs:
                 for x in [
                     VCFLabel.FP,
                     VCFLabel.FN,
-                    VCFLabel.TPBL
-                    if config.querykey_to_tp_baseline(w.l_query_key)
-                    else VCFLabel.TP,
+                    (
+                        VCFLabel.TPBL
+                        if config.querykey_to_tp_baseline(w.l_query_key)
+                        else VCFLabel.TP
+                    ),
                 ]
             ],
             allow_missing=True,

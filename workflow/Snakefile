@@ -9,7 +9,7 @@ sys.path.extend(["./workflow/scripts/python"])
 from common.config import StratoMod
 
 # convert regular boring dict to super-awesome pydantic model
-config = StratoMod.parse_obj(config)
+config = StratoMod.model_validate(config)
 
 
 include: "rules/wildcards.smk"

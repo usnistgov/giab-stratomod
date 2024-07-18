@@ -8,10 +8,12 @@ from common.prepare import process_labeled_data
 logger = setup_logging(snakemake.log[0])  # type: ignore
 
 
+# TODO this step is insanely memory hungry for no good reason
 def read_query(
     config: cfg.StratoMod, path: str, key: cfg.LabeledQueryKey
 ) -> pd.DataFrame:
     variables = config.querykey_to_variables(key)
+    # TODO ...probably in part because I am parsing the INFO field with this :/
     return pd.read_table(path).assign(**{str(k): v for k, v in variables.items()})
 
 

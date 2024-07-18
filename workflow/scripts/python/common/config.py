@@ -23,11 +23,13 @@ Several assumptions/conventions are maintained in order for this to work:
   statically checked
 
 """
+
 import re
 import random
 from pathlib import Path
 from typing import (
     Generic,
+    Hashable,
     Type,
     TypeVar,
     Sequence,
@@ -52,6 +54,7 @@ from pydantic import (
     NonNegativeInt,
     Field,
     FilePath,
+    AfterValidator,
 )
 from enum import Enum, unique
 from collections import ChainMap
@@ -70,7 +73,7 @@ IDX_COLS = [VAR_IDX, *BED_COLS]
 
 Fraction = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
 NonEmptyStr = Annotated[str, Field(min_length=1)]
-FeaturePrefix = Annotated[str, Field(regex="^[A-Z]+$")]
+FeaturePrefix = Annotated[str, Field(pattern="^[A-Z]+$")]
 
 # newtype string wrappers for different purposes
 
@@ -132,6 +135,14 @@ def _assert_keypattern(x: str) -> None:
 
 def bed_cols_indexed(indices: tuple[int, int, int]) -> dict[int, str]:
     return dict(zip(indices, BED_COLS))
+
+
+H = TypeVar("H", bound=Hashable)
+
+
+def _validate_unique_list(v: list[H]) -> list[H]:
+    assert len(v) == len(set(v)), "List must be unique"
+    return v
 
 
 # enums to prevent runaway strings
@@ -337,7 +348,7 @@ def wildcard_format_ext(format_str: str, keys: str, ext: str) -> str:
 
 class _BaseModel(PydanticBaseModel):
     class Config:
-        validate_all = True
+        validate_default = True
         extra = "forbid"
         frozen = True
 
@@ -382,7 +393,11 @@ RefsetMap = dict[RefsetKey, Refset]
 
 class CatVar(_BaseModel):
     "A categorical VCF variable"
-    levels: Annotated[list[str], Field(min_items=1, unique_items=True)]
+    levels: Annotated[
+        list[str],
+        Field(min_items=1),
+        AfterValidator(_validate_unique_list),
+    ]
     description: FeatureDesc | None = None
 
 
@@ -1332,11 +1347,11 @@ class FeaturePair(_BaseModel):
     f2: FeatureKey
 
 
-# NOTE need to use conlist vs set here since this will contain another
-# pydantic model class, which will prevent the overall model from being
-# converted to a dict (see https://github.com/pydantic/pydantic/issues/1090)
 InteractionSpec_ = FeatureKey | FeaturePair
-InteractionSpec = Annotated[list[InteractionSpec_], Field(unique_items=True)]
+InteractionSpec = Annotated[
+    list[InteractionSpec_],
+    AfterValidator(_validate_unique_list),
+]
 
 
 class _ExpressionBase(_BaseModel):

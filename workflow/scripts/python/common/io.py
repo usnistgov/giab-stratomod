@@ -30,6 +30,15 @@ def is_bgzip(p: Path) -> bool:
         return is_bgzip_stream(f)
 
 
+def gzip_(i: IO[bytes], o: IO[bytes]) -> sp.CompletedProcess[bytes]:
+    """Stream gzip to endpoint.
+
+    NOTE: this will block since this is almost always going to be the
+    final step in a pipeline.
+    """
+    return sp.run(["gzip", "-c"], stdin=i, stdout=o)
+
+
 def bgzip(i: IO[bytes], o: IO[bytes]) -> sp.CompletedProcess[bytes]:
     """Stream bgzip to endpoint.
 
@@ -37,6 +46,33 @@ def bgzip(i: IO[bytes], o: IO[bytes]) -> sp.CompletedProcess[bytes]:
     final step in a pipeline.
     """
     return sp.run(["bgzip", "-c"], stdin=i, stdout=o)
+
+
+CURL = ["curl", "-f", "-Ss", "-L", "-q"]
+
+
+def curl_cmd(url: str) -> list[str]:
+    return [*CURL, url]
+
+
+def curl(url: str, o: IO[bytes], log: Path) -> None:
+    p = sp.run(curl_cmd(url), stdout=o, stderr=sp.PIPE)
+    check_processes([p], log)
+
+
+def curl_gzip(url: str, ofinal: IO[bytes], log: Path, use_bgzip: bool) -> None:
+    zipf = bgzip if use_bgzip else gzip_
+    p1, o1 = spawn_stream(curl_cmd(url))
+    p2 = zipf(o1, ofinal)
+    o1.close()
+    check_processes([p1, p2], log)
+
+
+def curl_test(url: str, testfun: Callable[[IO[bytes]], bool], log: Path) -> bool:
+    p, o = spawn_stream(curl_cmd(url))
+    res = testfun(o)
+    check_processes([p], log)
+    return res
 
 
 def bgzip_file(
@@ -59,6 +95,13 @@ def gunzip(i: Path) -> tuple[sp.Popen[bytes], IO[bytes]]:
     final step in a pipeline.
     """
     p = sp.Popen(["gunzip", "-c", i], stdout=sp.PIPE)
+    if p.stdout is None:
+        raise DesignError()
+    return (p, p.stdout)
+
+
+def gunzip_stream(i: IO[bytes]) -> tuple[sp.Popen[bytes], IO[bytes]]:
+    p = sp.Popen(["gunzip", "-c"], stdin=i, stdout=sp.PIPE)
     if p.stdout is None:
         raise DesignError()
     return (p, p.stdout)

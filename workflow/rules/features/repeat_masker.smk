@@ -6,11 +6,11 @@ rmsk_wc_constraint = "[A-Za-z0-9-]+"
 
 
 def class_file(ext):
-    return f"{{rmsk_class}}.{ext}"
+    return "{rmsk_class}." + ext
 
 
 def family_file(ext):
-    return f"{{rmsk_class}}_{{rmsk_family}}.{ext}"
+    return "{rmsk_class}_{rmsk_family}." + ext
 
 
 use rule download_mappability_high as download_repeat_masker with:

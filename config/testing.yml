@@ -66,7 +66,7 @@ labeled_queries:
     # NOTE: the keys and value for this must conform to those set in static.yml
     # -> feature_names -> variables
     variables:
-      coverage: 40
+      coverage: "40"
       seqtech: "PacBio HiFi"
       variant_caller: "DeepVariant"
 
@@ -112,7 +112,7 @@ labeled_queries:
     split_biallelics: true
     benchmark: HG002_v421
     variables:
-      coverage: 40
+      coverage: "40"
       seqtech: Illumina
       variant_caller: "DeepVariant"
     corrections:
@@ -124,7 +124,7 @@ labeled_queries:
       url: https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/ChineseTrio/HG005_NA24631_son/NISTv4.2.1/GRCh37/SupplementaryFiles/inputvcfsandbeds/HG005_GRCh37_1_22_PacBio_HiFi_DeepVariant.vcf.gz
     benchmark: HG005_v421
     variables:
-      coverage: 40
+      coverage: "40"
       seqtech: "PacBio HiFi"
       variant_caller: "DeepVariant"
     corrections:
@@ -179,7 +179,7 @@ models:
         #
         # Default: {}
         variables:
-          coverage: 40
+          coverage: "40"
           seqtech: "Illumina"
           variant_caller: "DeepVariant"
 
